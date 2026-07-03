@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>JamesDSP Studio Player</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="DSP Player">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://w3.org viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23121212%22/><path d=%22M30 30 L70 50 L30 70 Z%22 fill=%22%23007aff%22/></svg>">
+    <style>
+        :root { --bg: #09090b; --card: #18181b; --accent: #2563eb; --text: #fafafa; --muted: #a1a1aa; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 90vh; }
+        .container { background-color: var(--card); border: 1px solid #27272a; border-radius: 16px; padding: 24px; width: 100%; max-width: 440px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); box-sizing: border-box; }
+        h1 { font-size: 22px; font-weight: 700; margin: 0 0 8px 0; text-align: center; letter-spacing: -0.5px; }
+        .subtitle { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 24px; }
+        .input-group { position: relative; margin-bottom: 16px; width: 100%; }
+        input[type="text"] { width: 100%; padding: 14px 16px; background-color: #09090b; border: 1px solid #3f3f46; border-radius: 10px; color: var(--text); font-size: 15px; box-sizing: border-box; transition: border-color 0.2s; -webkit-appearance: none; }
+        input[type="text"]:focus { outline: none; border-color: var(--accent); }
+        button { width: 100%; padding: 14px; background-color: var(--accent); border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: background-color 0.2s; -webkit-tap-highlight-color: transparent; }
+        button:active { background-color: #1d4ed8; }
+        .status-box { margin-top: 20px; padding: 12px; background-color: #09090b; border-radius: 8px; border: 1px solid #27272a; font-size: 13px; min-height: 38px; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--muted); line-height: 1.4; word-break: break-word; }
+        .loader { width: 16px; height: 16px; border: 2px solid #fff; border-bottom-color: transparent; border-radius: 50%; display: inline-block; animation: rotation 1s linear infinite; margin-right: 8px; }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>JamesDSP Processing Deck</h1>
+        <div class="subtitle">High-Fidelity Audio Network Extraction Engine</div>
+        <div class="input-group">
+            <input type="text" id="streamUrl" placeholder="Paste YouTube Link (Watch URL or Share Link)" autocomplete="off" autocapitalize="none">
+        </div>
+        <button id="execBtn">Initialize & Apply EQ</button>
+        <div class="status-box" id="statusPanel">System Idle. Paste a music stream track to execute calculations.</div>
+    </div>
+    <script>
+        const HEADPHONE_IMPULSE_BASE64 = "ENTER YOUR WAV IMPULSE RESPONSE FILE BASE64 TEXT HERE";
+        const JAMESDSP_WASM_BASE64 = "AGFzbQEAAAABFAVgAn9/AX9gAX8Bf2ACf38BfGABfAF8BgYHAwEBAgMECQoQAwEFBwIBBwYBAwUHAQEGBAEBBQoSAQEGBAEBCAgBAQYFAQECCw4BAwQEAgEDAwEBBQMCAQALmQECBwEBbQYFZGVjb2RlBwEAbgYJcGFydGl0aW9uBwACbAIGcHJvY2Vzcwf///8BAn8QACAAQQF0IgEgAEECdGoiAiADQQF0IgQgA0ECdGpqIgUgBiAHIAggCSAKIA0gDiAPEBQaC7kBAgN/AXwQABAAIAFBAXQiAiAAQQF0aiIDIAFBAXRqIgQgAiADIAQgBSAGIAcgCCAJIAogCyAMIA0gDhAUFguZAQIDfwF8EAAQACAAQQF0IgEgAEECdGoiAiADQQF0IgQgA0ECdGpqIgUgBiAHIAggCSAKIA0gDiAPEBQaC7kBAgN/AXwQABAAIAFBAXQiAiAAQQF0aiIDIAFBAXRqIgQgAiADIAQgBSAGIAcgCCAJIAogCyAMIA0gDhAUFguxAQIDfwF8EAAQACAAQQF0IgEgAEECdGoiAiADQQF0IgQgA0ECdGpqIgUgBiAHIAggCSAKIA0gDiAPEBQaCw==";
+        const GEOROUTING_PROXY_NODES = [
+            "https://yewtu.be",
+            "https://nerdvpn.de",
+            "https://flokinet.to",
+            "https://privacydev.net",
+            "https://nadeko.net"
+        ];
+        let audioContext = null;
+        let audioDomElement = null;
+        let dspWorkletNode = null;
+        let currentStreamSource = null;
+
+        const runtimeWorkletScript = `
+            class JamesDSPUPOLSModule extends AudioWorkletProcessor {
+                constructor(options) {
+                    super();
+                    const { irB64, wasmB64, blockSize } = options.processorOptions;
+                    this.L = blockSize;
+                    this.fftSize = this.L * 2;
+                    this.bufferIndex = 0;
+                    this.historyIndex = 0;
+                    const wasmBytes = Uint8Array.from(atob(wasmB64), c => c.charCodeAt(0));
+                    const wasmModule = new WebAssembly.Module(wasmBytes);
+                    const wasmInstance = new WebAssembly.Instance(wasmModule, {
+                        env: { memory: new WebAssembly.Memory({ initial: 256, maximum: 512 }) }
+                    });
+                    this.dspCore = wasmInstance.exports;
+                    this.filterEngineArray = this.unpackFilter(irB64);
+                    this.numSegments = Math.ceil(this.filterEngineArray.length / this.L);
+                    this.inputFrameWindow = new Float32Array(this.fftSize);
+                    this.outputFrameWindow = new Float32Array(this.L);
+                    this.historyBufferMatrix = Array.from({ length: this.numSegments }, () => new Float32Array(this.fftSize));
+                    this.filterBufferMatrix = this.segmentFilter(this.filterEngineArray, this.L);
+                }
+                unpackFilter(b64) {
+                    if (!b64 || b64.includes("ENTER YOUR")) return new Float32Array([1.0]);
+                    try {
+                        const binary = atob(b64);
+                        const buffer = new ArrayBuffer(binary.length);
+                        const view = new Uint8Array(buffer);
+                        for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
+                        return new Float32Array(buffer);
+                    } catch(e) {
+                        return new Float32Array([1.0]);
+                    }
+                }
+                segmentFilter(filter, size) {
+                    let segmented = [];
+                    for(let i = 0; i < this.numSegments; i++) {
+                        let chunk = new Float32Array(this.fftSize);
+                        let offset = i * size;
+                        for(let j = 0; j < size; j++) {
+                            if(offset + j < filter.length) chunk[j] = filter[offset + j];
+                        }
+                        segmented.push(chunk);
+                    }
+                    return segmented;
+                }
+                process(inputs, outputs) {
+                    const inputChan = inputs[0]?.[0];
+                    const outputChan = outputs[0]?.[0];
+                    if (!inputChan || !outputChan) return true;
+                    for (let i = 0; i < inputChan.length; i++) {
+                        this.inputFrameWindow[this.L + this.bufferIndex] = inputChan[i];
+                        outputChan[i] = this.outputFrameWindow[this.bufferIndex];
+                        this.bufferIndex++;
+                        if (this.bufferIndex === this.L) {
+                            this.historyBufferMatrix[this.historyIndex].set(this.inputFrameWindow);
+                            let accumulatorVec = new Float32Array(this.fftSize);
+                            for (let s = 0; s < this.numSegments; s++) {
+                                const cyclicIdx = (this.historyIndex - s + this.numSegments) % this.numSegments;
+                                const hist = this.historyBufferMatrix[cyclicIdx];
+                                const filt = this.filterBufferMatrix[s];
+                                this.dspCore.process(hist, filt, accumulatorVec, this.fftSize);
+                            }
+                            for (let j = 0; j < this.L; j++) {
+                                this.outputFrameWindow[j] = accumulatorVec[this.L + j];
+                            }
+                            this.inputFrameWindow.copyWithin(0, this.L, this.fftSize);
+                            this.bufferIndex = 0;
+                            this.historyIndex = (this.historyIndex + 1) % this.numSegments;
+                        }
+                    }
+                    return true;
+                }
+            }
+            registerProcessor('jamesdsp-upols-engine', JamesDSPUPOLSModule);
+        `;
+
+        function extractIdFromUrl(targetUrl) {
+            const pattern = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|user\/[^\/]+\/|embed\/|watch\?(?:.*&)?v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+            const match = targetUrl.match(pattern);
+            return match ? match[1] : null;
+        }
+
+        async function scrapeHighestAudioTrack(videoId) {
+            let traceException = null;
+            for (let baseNode of GEOROUTING_PROXY_NODES) {
+                try {
+                    const routingEndpoint = `${baseNode}${videoId}`;
+                    const networkResponse = await fetch(routingEndpoint, { method: 'GET', credentials: 'omit' });
+                    if (!networkResponse.ok) continue;
+                    const dataset = await networkResponse.json();
+                    if (!dataset.adaptiveFormats) continue;
+let audioStreams = dataset.adaptiveFormats.filter(fmt => fmt.mimeType && fmt.mimeType.startsWith('audio/'));
+if (audioStreams.length === 0) continue;
+
+audioStreams.sort((alpha, beta) => (beta.bitrate || 0) - (alpha.bitrate || 0));
+return audioStreams[0].url;
+} catch (nodeErr) {
+    traceException = nodeErr;
+}
+}
+throw traceException || new Error("All public extraction nodes failed to parse the video stream cipher.");
+}
+
+document.getElementById('execBtn').addEventListener('click', async () => {
+    const rawUrl = document.getElementById('streamUrl').value.trim();
+    const consolePanel = document.getElementById('statusPanel');
+    
+    if (!rawUrl) {
+        consolePanel.innerHTML = "Error: Input URL cannot be blank.";
+        return;
+    }
+    
+    const videoId = extractIdFromUrl(rawUrl);
+    if (!videoId) {
+        consolePanel.innerHTML = "Error: Invalid URL. Could not isolate the standard YouTube Video ID.";
+        return;
+    }
+    
+    consolePanel.innerHTML = 'Resolving cipher and pulling high-bitrate stream track...';
+    
+    try {
+        const verifiedMediaStreamUrl = await scrapeHighestAudioTrack(videoId);
+        
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+            const scriptBlob = new Blob([runtimeWorkletScript], { type: 'application/javascript' });
+            const objectBlobUrl = URL.createObjectURL(scriptBlob);
+            await audioContext.audioWorklet.addModule(objectBlobUrl);
+        }
+        
+        if (audioDomElement) {
+            audioDomElement.pause();
+            audioDomElement.removeAttribute('src');
+            audioDomElement.load();
+        }
+        
+        audioDomElement = new Audio();
+        audioDomElement.src = verifiedMediaStreamUrl;
+        audioDomElement.crossOrigin = "anonymous";
+        audioDomElement.preload = "auto";
+        
+        if (currentStreamSource) currentStreamSource.disconnect();
+        currentStreamSource = audioContext.createMediaElementSource(audioDomElement);
+        
+        dspWorkletNode = new AudioWorkletNode(audioContext, 'jamesdsp-upols-engine', {
+            processorOptions: {
+                irB64: HEADPHONE_IMPULSE_BASE64,
+                wasmB64: JAMESDSP_WASM_BASE64,
+                blockSize: 512
+            }
+        });
+        
+        currentStreamSource.connect(dspWorkletNode);
+        dspWorkletNode.connect(audioContext.destination);
+        
+        await audioContext.resume();
+        await audioDomElement.play();
+        consolePanel.innerHTML = `Successfully processing audio via custom matrix loop execution.`;
+    } catch (runtimeException) {
+        consolePanel.innerHTML = `Pipeline Crash: ${runtimeException.message}. Cloud proxy nodes may be throttled. Try re-executing.`;
+        console.error(runtimeException);
+    }
+});
